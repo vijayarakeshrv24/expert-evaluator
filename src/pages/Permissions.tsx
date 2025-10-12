@@ -5,14 +5,16 @@ import { Card } from '@/components/ui/card';
 import Navbar from '@/components/Navbar';
 import { useAuthStore } from '@/stores/authStore';
 import { useAssessmentStore } from '@/stores/assessmentStore';
+import { FaceRegistration } from '@/components/FaceRegistration';
 import { Camera, CheckCircle, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
 const Permissions = () => {
   const navigate = useNavigate();
   const { user } = useAuthStore();
-  const { permissions, setPermissions } = useAssessmentStore();
+  const { permissions, setPermissions, currentAssessmentId, faceEmbedding, setFaceEmbedding } = useAssessmentStore();
   const [requesting, setRequesting] = useState(false);
+  const [showFaceRegistration, setShowFaceRegistration] = useState(false);
 
   useEffect(() => {
     if (!user) {
@@ -20,19 +22,19 @@ const Permissions = () => {
     }
   }, [user, navigate]);
 
-  const requestPermissions = async () => {
+  const handleGrantAccess = async () => {
     setRequesting(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: true,
         audio: false,
       });
-      
-      // Stop the stream immediately, we just needed permission
+
       stream.getTracks().forEach(track => track.stop());
-      
+
       setPermissions({ camera: true, microphone: false });
-      toast.success('Camera access granted');
+      toast.success('Camera access granted. Please register your face.');
+      setShowFaceRegistration(true);
     } catch (error) {
       toast.error('Camera access denied. Please enable camera to continue.');
       setPermissions({ camera: false, microphone: false });
@@ -41,9 +43,19 @@ const Permissions = () => {
     }
   };
 
+  const handleFaceRegistrationComplete = (embeddings: number[]) => {
+    setFaceEmbedding(embeddings);
+    setShowFaceRegistration(false);
+    toast.success('Face registered successfully. You can now continue to the assessment.');
+  };
+
   const handleContinue = () => {
     if (!permissions.camera) {
       toast.error('Camera access is required to continue');
+      return;
+    }
+    if (!faceEmbedding) {
+      toast.error('Face registration is required to continue');
       return;
     }
     navigate('/questions');
@@ -91,25 +103,41 @@ const Permissions = () => {
               </h4>
               <ul className="text-sm space-y-2 text-muted-foreground">
                 <li>• Your camera feed is used only for verification</li>
-                <li>• Multiple faces detected will show a warning</li>
+                <li>• Face registration is required before starting</li>
+                <li>• Multiple faces detected will pause the assessment</li>
+                <li>• Only the registered user can take the assessment</li>
                 <li>• Recordings are not stored permanently</li>
-                <li>• You can review our privacy policy anytime</li>
               </ul>
             </div>
+
+            {showFaceRegistration && currentAssessmentId && (
+              <FaceRegistration
+                assessmentId={currentAssessmentId}
+                onRegistrationComplete={handleFaceRegistrationComplete}
+              />
+            )}
 
             <div className="flex gap-4">
               {!permissions.camera && (
                 <Button
-                  onClick={requestPermissions}
+                  onClick={handleGrantAccess}
                   disabled={requesting}
                   className="flex-1 gradient-primary text-white"
                 >
-                  {requesting ? 'Requesting...' : 'Grant Camera Access'}
+                  {requesting ? 'Requesting...' : 'Grant Camera Access & Register Face'}
+                </Button>
+              )}
+              {permissions.camera && !faceEmbedding && !showFaceRegistration && (
+                <Button
+                  onClick={() => setShowFaceRegistration(true)}
+                  className="flex-1 gradient-primary text-white"
+                >
+                  Register Face
                 </Button>
               )}
               <Button
                 onClick={handleContinue}
-                disabled={!permissions.camera}
+                disabled={!permissions.camera || !faceEmbedding}
                 className="flex-1 gradient-primary text-white"
               >
                 Continue to Assessment

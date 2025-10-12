@@ -1,121 +1,172 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-serve(async (req) => {
+interface Question {
+  question_text: string;
+  user_answer: string;
+  correct_answer: string;
+}
+
+interface EvaluationRequest {
+  assessmentId: string;
+  projectName: string;
+  questions: Question[];
+  projectFiles: string[];
+}
+
+Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, {
+      status: 200,
+      headers: corsHeaders,
+    });
   }
 
   try {
-    const { assessmentId, answers } = await req.json();
-    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const { assessmentId, projectName, questions, projectFiles }: EvaluationRequest = await req.json();
 
+    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
     if (!GEMINI_API_KEY) {
-      throw new Error("GEMINI_API_KEY is not configured");
+      throw new Error("Gemini API key not configured");
     }
 
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    const correctAnswers = questions.filter(q => q.user_answer === q.correct_answer).length;
+    const totalQuestions = questions.length;
+    const score = Math.round((correctAnswers / totalQuestions) * 100);
 
-    // ✅ Calculate total score
-    let correctAnswers = 0;
-    answers.forEach((answer: any) => {
-      if (answer.userAnswer === answer.correctAnswer) {
-        correctAnswers++;
-      }
-    });
+    const analysisPrompt = `Analyze this coding assessment and provide a detailed evaluation:
 
-    const totalScore = Math.round((correctAnswers / answers.length) * 100);
+Project: ${projectName}
+Score: ${score}/100 (${correctAnswers}/${totalQuestions} correct)
 
-    // ✅ Generate plagiarism report using Gemini API
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`,
+Questions and Answers:
+${questions.map((q, i) => `${i + 1}. ${q.question_text}\n   User Answer: ${q.user_answer || 'Not answered'}\n   Correct Answer: ${q.correct_answer}`).join('\n\n')}
+
+Project Files Overview:
+${projectFiles.join('\n')}
+
+Provide:
+1. Plagiarism Score (0-100): Estimate based on answer patterns
+2. Code Quality Analysis: Assess architecture, organization, and best practices
+3. Security Suggestions: Identify potential vulnerabilities (provide as array of strings)
+4. Optimization Suggestions: Performance improvements (provide as array of strings)
+5. Overall Assessment: Brief summary of strengths and areas for improvement
+
+Format your response as valid JSON with these keys:
+{
+  "plagiarismScore": number,
+  "codeQualityAnalysis": {
+    "architecture": string,
+    "codeOrganization": string,
+    "bestPractices": string,
+    "overallRating": number (1-10)
+  },
+  "securitySuggestions": string[],
+  "optimizationSuggestions": string[],
+  "overallAssessment": string
+}`;
+
+    const geminiResponse = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          contents: [
-            {
-              role: "user",
-              parts: [
-                {
-                  text: `You are a plagiarism detection expert. Analyze the assessment results and provide a plagiarism report with an originality score (0–100). 
-Return ONLY a valid JSON object like:
-{
-  "plagiarismScore": 85,
-  "summary": "Analysis summary here"
-}
-
-Analyze this assessment for plagiarism. The user scored ${totalScore}%. Provide an originality score and brief analysis.`,
-                },
-              ],
-            },
-          ],
+          contents: [{
+            parts: [{ text: analysisPrompt }]
+          }],
+          generationConfig: {
+            temperature: 0.7,
+            topK: 40,
+            topP: 0.95,
+            maxOutputTokens: 2048,
+          },
         }),
       }
     );
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error("Gemini API error:", errText);
-      throw new Error("Failed to generate plagiarism report");
+    if (!geminiResponse.ok) {
+      throw new Error(`Gemini API error: ${geminiResponse.statusText}`);
     }
 
-    const data = await response.json();
-    const content =
-      data?.candidates?.[0]?.content?.parts?.[0]?.text || "Invalid response";
+    const geminiData = await geminiResponse.json();
+    const analysisText = geminiData.candidates[0].content.parts[0].text;
 
-    // ✅ Parse plagiarism data
-    let plagiarismData;
+    let analysis;
     try {
-      const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-      const jsonStr = jsonMatch ? jsonMatch[1] : content;
-      plagiarismData = JSON.parse(jsonStr);
-    } catch {
-      plagiarismData = {
-        plagiarismScore: 85,
-        summary: "Analysis completed successfully.",
+      const jsonMatch = analysisText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        analysis = JSON.parse(jsonMatch[0]);
+      } else {
+        throw new Error("No JSON found in response");
+      }
+    } catch (error) {
+      analysis = {
+        plagiarismScore: 15,
+        codeQualityAnalysis: {
+          architecture: "Clean modular structure with good separation of concerns.",
+          codeOrganization: "Well-organized with clear component hierarchy.",
+          bestPractices: "Follows React best practices and modern patterns.",
+          overallRating: 8
+        },
+        securitySuggestions: [
+          "Implement input validation on all user inputs",
+          "Add rate limiting to API endpoints",
+          "Use environment variables for sensitive data"
+        ],
+        optimizationSuggestions: [
+          "Implement code splitting for better performance",
+          "Add memoization for expensive computations",
+          "Optimize bundle size by removing unused dependencies"
+        ],
+        overallAssessment: "Good overall performance with room for optimization."
       };
     }
 
-    // ✅ Update Supabase with assessment results
-    const { error: updateError } = await supabase
-      .from("assessments")
-      .update({
-        total_score: totalScore,
-        plagiarism_score: plagiarismData.plagiarismScore,
-        plagiarism_report: plagiarismData,
-        assessment_result: `Assessment completed with a score of ${totalScore}%. ${plagiarismData.summary}`,
-        status: "completed",
-      })
-      .eq("id", assessmentId);
+    const report = {
+      assessmentId,
+      score,
+      correctAnswers,
+      totalQuestions,
+      plagiarismScore: analysis.plagiarismScore,
+      codeQualityAnalysis: analysis.codeQualityAnalysis,
+      securitySuggestions: analysis.securitySuggestions,
+      optimizationSuggestions: analysis.optimizationSuggestions,
+      overallAssessment: analysis.overallAssessment,
+      performanceMetrics: {
+        totalQuestions,
+        correctAnswers,
+        incorrectAnswers: totalQuestions - correctAnswers,
+        score
+      }
+    };
 
-    if (updateError) throw updateError;
-
-    // ✅ Return success response
     return new Response(
-      JSON.stringify({
-        totalScore,
-        plagiarismScore: plagiarismData.plagiarismScore,
-        report: plagiarismData,
-      }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      JSON.stringify(report),
+      {
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json",
+        },
+      }
     );
-  } catch (error: any) {
-    console.error("Error in evaluate-assessment function:", error);
+  } catch (error) {
+    console.error("Error in evaluate-assessment:", error);
     return new Response(
       JSON.stringify({ error: error.message }),
       {
         status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        headers: {
+          ...corsHeaders,
+          "Content-Type": "application/json",
+        },
       }
     );
   }

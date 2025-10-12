@@ -6,10 +6,11 @@ import Navbar from '@/components/Navbar';
 import { useAuthStore } from '@/stores/authStore';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import { CheckCircle, XCircle, Shield, ArrowLeft, TrendingUp, Award, Download } from 'lucide-react';
+import { CheckCircle, XCircle, Shield, ArrowLeft, TrendingUp, Award, Download, Lock, Sparkles, AlertTriangle } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Legend, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid } from 'recharts';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
+import { QRCodeCanvas } from 'qrcode.react';
 
 interface AssessmentDetails {
   id: string;
@@ -20,6 +21,24 @@ interface AssessmentDetails {
   assessment_result: string;
   created_at: string;
   completed_at: string;
+}
+
+interface AssessmentReport {
+  plagiarism_score: number;
+  code_quality_analysis: {
+    architecture: string;
+    codeOrganization: string;
+    bestPractices: string;
+    overallRating: number;
+  };
+  security_suggestions: string[];
+  performance_metrics: {
+    totalQuestions: number;
+    correctAnswers: number;
+    incorrectAnswers: number;
+    score: number;
+  };
+  certificate_data: any;
 }
 
 interface Question {
@@ -37,6 +56,8 @@ const Result = () => {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
+  const [report, setReport] = useState<AssessmentReport | null>(null);
+  const [generatingReport, setGeneratingReport] = useState(false);
 
   useEffect(() => {
     if (!user) {
@@ -71,11 +92,100 @@ const Result = () => {
         correct_answer: q.correct_answer,
         user_answer: q.user_answer || '',
       })));
+
+      const { data: reportData, error: reportError } = await supabase
+        .from('assessment_reports')
+        .select('*')
+        .eq('assessment_id', id)
+        .maybeSingle();
+
+      if (!reportError && reportData) {
+        setReport({
+          plagiarism_score: reportData.plagiarism_score,
+          code_quality_analysis: reportData.code_quality_analysis,
+          security_suggestions: reportData.security_suggestions,
+          performance_metrics: reportData.performance_metrics,
+          certificate_data: reportData.certificate_data,
+        });
+      }
     } catch (error: any) {
       toast.error('Failed to load results');
       console.error(error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const generateAIReport = async () => {
+    if (!assessment || !questions.length) return;
+
+    setGeneratingReport(true);
+    try {
+      const { data: filesData } = await supabase
+        .from('project_files')
+        .select('file_name')
+        .eq('assessment_id', id!);
+
+      const projectFiles = filesData?.map(f => f.file_name) || [];
+
+      const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/evaluate-assessment`;
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          assessmentId: id,
+          projectName: assessment.project_name,
+          questions,
+          projectFiles,
+        }),
+      });
+
+      if (!response.ok) throw new Error('Failed to generate report');
+
+      const reportData = await response.json();
+
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('User not authenticated');
+
+      const { error: insertError } = await supabase
+        .from('assessment_reports')
+        .insert({
+          assessment_id: id,
+          user_id: user.id,
+          plagiarism_score: reportData.plagiarismScore,
+          code_quality_analysis: reportData.codeQualityAnalysis,
+          security_suggestions: reportData.securitySuggestions,
+          performance_metrics: reportData.performanceMetrics,
+          certificate_data: {
+            userName: user.email,
+            projectName: assessment.project_name,
+            score: reportData.score,
+          },
+        });
+
+      if (insertError) throw insertError;
+
+      setReport({
+        plagiarism_score: reportData.plagiarismScore,
+        code_quality_analysis: reportData.codeQualityAnalysis,
+        security_suggestions: reportData.securitySuggestions,
+        performance_metrics: reportData.performanceMetrics,
+        certificate_data: {
+          userName: user.email,
+          projectName: assessment.project_name,
+          score: reportData.score,
+        },
+      });
+
+      toast.success('AI report generated successfully');
+    } catch (error: any) {
+      console.error('Error generating report:', error);
+      toast.error('Failed to generate AI report');
+    } finally {
+      setGeneratingReport(false);
     }
   };
 
@@ -116,22 +226,38 @@ const Result = () => {
     setDownloading(true);
     try {
       const reportElement = document.getElementById('assessment-report');
-      if (!reportElement) return;
+      const certificateElement = document.getElementById('certificate-section');
+      if (!reportElement || !certificateElement) return;
 
-      const canvas = await html2canvas(reportElement, {
-        scale: 2,
-        useCORS: true,
-        logging: false
-      });
-
-      const imgData = canvas.toDataURL('image/png');
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
 
-      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-      pdf.save(`Assessment_Report_${assessment?.id}.pdf`);
-      toast.success('Report downloaded successfully');
+      const reportCanvas = await html2canvas(reportElement, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff'
+      });
+
+      const reportImgData = reportCanvas.toDataURL('image/png');
+      const reportHeight = (reportCanvas.height * pdfWidth) / reportCanvas.width;
+      pdf.addImage(reportImgData, 'PNG', 0, 0, pdfWidth, reportHeight);
+
+      pdf.addPage();
+
+      const certCanvas = await html2canvas(certificateElement, {
+        scale: 2,
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff'
+      });
+
+      const certImgData = certCanvas.toDataURL('image/png');
+      const certHeight = (certCanvas.height * pdfWidth) / certCanvas.width;
+      pdf.addImage(certImgData, 'PNG', 0, 0, pdfWidth, certHeight);
+
+      pdf.save(`Assessment_Report_${assessment?.project_name}_${assessment?.id}.pdf`);
+      toast.success('Report and certificate downloaded successfully');
     } catch (error) {
       toast.error('Failed to download report');
       console.error(error);
@@ -154,15 +280,27 @@ const Result = () => {
             <ArrowLeft className="h-4 w-4" />
             Back to Dashboard
           </Button>
-          
-          <Button
-            onClick={downloadPDF}
-            disabled={downloading}
-            className="gap-2"
-          >
-            <Download className="h-4 w-4" />
-            {downloading ? 'Generating...' : 'Download Report'}
-          </Button>
+
+          <div className="flex gap-2">
+            {!report && (
+              <Button
+                onClick={generateAIReport}
+                disabled={generatingReport}
+                className="gap-2 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white"
+              >
+                <Sparkles className={`h-4 w-4 ${generatingReport ? 'animate-spin' : ''}`} />
+                {generatingReport ? 'Generating AI Report...' : 'Generate AI Report'}
+              </Button>
+            )}
+            <Button
+              onClick={downloadPDF}
+              disabled={downloading || !report}
+              className="gap-2"
+            >
+              <Download className="h-4 w-4" />
+              {downloading ? 'Generating...' : 'Download Report & Certificate'}
+            </Button>
+          </div>
         </div>
 
         <div id="assessment-report" className="space-y-6 animate-fade-in">
@@ -336,7 +474,152 @@ const Result = () => {
               })}
             </div>
           </Card>
+
+          {report && (
+            <>
+              <Card className="p-6 bg-gradient-to-br from-blue-50 to-cyan-50 dark:from-blue-950 dark:to-cyan-950 border-blue-200 dark:border-blue-800">
+                <div className="flex items-center gap-2 mb-4">
+                  <Sparkles className="h-6 w-6 text-blue-600" />
+                  <h2 className="text-2xl font-semibold">AI-Powered Code Quality Analysis</h2>
+                </div>
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div className="space-y-3">
+                    <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
+                      <h3 className="font-semibold mb-2 flex items-center gap-2">
+                        <TrendingUp className="h-5 w-5 text-blue-600" />
+                        Architecture
+                      </h3>
+                      <p className="text-sm text-muted-foreground">{report.code_quality_analysis.architecture}</p>
+                    </div>
+                    <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
+                      <h3 className="font-semibold mb-2">Code Organization</h3>
+                      <p className="text-sm text-muted-foreground">{report.code_quality_analysis.codeOrganization}</p>
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
+                      <h3 className="font-semibold mb-2">Best Practices</h3>
+                      <p className="text-sm text-muted-foreground">{report.code_quality_analysis.bestPractices}</p>
+                    </div>
+                    <div className="bg-white dark:bg-gray-800 p-4 rounded-lg">
+                      <h3 className="font-semibold mb-2">Overall Rating</h3>
+                      <div className="flex items-center gap-2">
+                        <div className="flex-1 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                          <div
+                            className="bg-gradient-to-r from-blue-600 to-cyan-600 h-2 rounded-full"
+                            style={{ width: `${report.code_quality_analysis.overallRating * 10}%` }}
+                          />
+                        </div>
+                        <span className="font-bold text-blue-600">{report.code_quality_analysis.overallRating}/10</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+
+              <div className="grid md:grid-cols-2 gap-6">
+                <Card className="p-6 bg-red-50 dark:bg-red-950 border-red-200 dark:border-red-800">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Lock className="h-6 w-6 text-red-600" />
+                    <h3 className="text-xl font-semibold">Security Suggestions</h3>
+                  </div>
+                  <ul className="space-y-2">
+                    {report.security_suggestions.map((suggestion, idx) => (
+                      <li key={idx} className="flex items-start gap-2 text-sm">
+                        <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5 flex-shrink-0" />
+                        <span>{suggestion}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </Card>
+
+                <Card className="p-6 bg-green-50 dark:bg-green-950 border-green-200 dark:border-green-800">
+                  <div className="flex items-center gap-2 mb-4">
+                    <TrendingUp className="h-6 w-6 text-green-600" />
+                    <h3 className="text-xl font-semibold">Optimization Suggestions</h3>
+                  </div>
+                  <ul className="space-y-2">
+                    {Array.isArray(report.security_suggestions) && report.security_suggestions.length > 0 ? (
+                      report.security_suggestions.slice(0, 3).map((suggestion, idx) => (
+                        <li key={idx} className="flex items-start gap-2 text-sm">
+                          <CheckCircle className="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
+                          <span>{suggestion}</span>
+                        </li>
+                      ))
+                    ) : (
+                      <li className="text-sm text-muted-foreground">No optimization suggestions at this time.</li>
+                    )}
+                  </ul>
+                </Card>
+              </div>
+            </>
+          )}
         </div>
+
+        {report && (
+          <div id="certificate-section" className="mt-8 bg-white p-12 rounded-lg shadow-2xl">
+            <div className="max-w-4xl mx-auto">
+              <div className="text-center mb-8 border-b-4 border-blue-600 pb-6">
+                <h1 className="text-5xl font-bold text-gray-900 mb-2">Certificate of Completion</h1>
+                <p className="text-gray-600">Expert Evaluator Assessment System</p>
+              </div>
+
+              <div className="text-center space-y-6 mb-8">
+                <p className="text-gray-700 text-lg">This is to certify that</p>
+                <h2 className="text-4xl font-bold text-blue-600">{user?.email}</h2>
+                <p className="text-gray-700 text-lg">has successfully completed the assessment for</p>
+                <h3 className="text-3xl font-semibold text-gray-900">{assessment?.project_name}</h3>
+              </div>
+
+              <div className="grid grid-cols-3 gap-6 my-8 p-6 bg-gradient-to-r from-blue-50 to-cyan-50 rounded-lg">
+                <div className="text-center">
+                  <div className="text-4xl font-bold text-blue-600">{assessment?.total_score}%</div>
+                  <div className="text-sm text-gray-600 mt-1">Overall Score</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-4xl font-bold text-green-600">{report.plagiarism_score}%</div>
+                  <div className="text-sm text-gray-600 mt-1">Originality</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-4xl font-bold text-cyan-600">{report.code_quality_analysis.overallRating}/10</div>
+                  <div className="text-sm text-gray-600 mt-1">Code Quality</div>
+                </div>
+              </div>
+
+              <div className="flex justify-between items-end mt-12">
+                <div className="text-center">
+                  <div className="w-48 border-t-2 border-gray-400 pt-2">
+                    <p className="text-sm text-gray-600">Date of Completion</p>
+                    <p className="font-semibold text-gray-900">{new Date(assessment?.completed_at).toLocaleDateString()}</p>
+                  </div>
+                </div>
+
+                <div className="flex flex-col items-center">
+                  <QRCodeCanvas
+                    value={`${window.location.origin}/result/${assessment?.id}`}
+                    size={120}
+                    level="H"
+                    includeMargin
+                  />
+                  <p className="text-xs text-gray-600 mt-2">Scan to verify</p>
+                </div>
+
+                <div className="text-center">
+                  <div className="w-48 border-t-2 border-gray-400 pt-2">
+                    <p className="text-sm text-gray-600">Verified by</p>
+                    <p className="font-semibold text-gray-900">Expert Evaluator Assistant</p>
+                    <p className="text-xs text-gray-600">(Gemini AI)</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-8 text-center text-sm text-gray-500">
+                <p>This certificate validates the completion and evaluation of the assessment</p>
+                <p>Certificate ID: {assessment?.id}</p>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );

@@ -23,14 +23,16 @@ export interface AssessmentState {
     camera: boolean;
     microphone: boolean;
   };
+  faceEmbedding: number[] | null;
   questions: Question[];
   currentQuestionIndex: number;
   timeRemaining: number;
   isAssessmentComplete: boolean;
-  
+
   setCurrentAssessmentId: (id: string | null) => void;
   setUploadedFiles: (files: UploadedFile[]) => void;
   setPermissions: (permissions: { camera: boolean; microphone: boolean }) => void;
+  setFaceEmbedding: (embedding: number[] | null) => void;
   setQuestions: (questions: Question[]) => void;
   setCurrentQuestionIndex: (index: number) => void;
   setTimeRemaining: (time: number) => void;
@@ -46,14 +48,16 @@ export const useAssessmentStore = create<AssessmentState>((set) => ({
     camera: false,
     microphone: false,
   },
+  faceEmbedding: null,
   questions: [],
   currentQuestionIndex: 0,
   timeRemaining: 30,
   isAssessmentComplete: false,
-  
+
   setCurrentAssessmentId: (id) => set({ currentAssessmentId: id }),
   setUploadedFiles: (files) => set({ uploadedFiles: files }),
   setPermissions: (permissions) => set({ permissions }),
+  setFaceEmbedding: (embedding) => set({ faceEmbedding: embedding }),
   setQuestions: (questions) => set({ questions }),
   setCurrentQuestionIndex: (index) => set({ currentQuestionIndex: index }),
   setTimeRemaining: (time) => set({ timeRemaining: time }),
@@ -68,6 +72,7 @@ export const useAssessmentStore = create<AssessmentState>((set) => ({
     set({
       currentAssessmentId: null,
       uploadedFiles: [],
+      faceEmbedding: null,
       questions: [],
       currentQuestionIndex: 0,
       timeRemaining: 30,

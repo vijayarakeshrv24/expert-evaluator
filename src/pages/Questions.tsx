@@ -5,6 +5,7 @@ import { Card } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import Navbar from '@/components/Navbar';
 import FaceDetection from '@/components/FaceDetection';
+import { FaceVerification } from '@/components/FaceVerification';
 import { useAuthStore } from '@/stores/authStore';
 import { useAssessmentStore } from '@/stores/assessmentStore';
 import { supabase } from '@/integrations/supabase/client';
@@ -22,13 +23,16 @@ const Questions = () => {
     setTimeRemaining,
     setUserAnswer,
     uploadedFiles,
+    currentAssessmentId,
     setCurrentAssessmentId,
+    faceEmbedding,
   } = useAssessmentStore();
   const [loading, setLoading] = useState(true);
   const [selectedAnswer, setSelectedAnswer] = useState('');
   const [violations, setViolations] = useState<string[]>([]);
   const [isMonitoringValid, setIsMonitoringValid] = useState(false);
   const [bluetoothWarning, setBluetoothWarning] = useState(false);
+  const [assessmentPaused, setAssessmentPaused] = useState(false);
 
   const handleViolation = (type: 'multiple_faces' | 'no_face' | 'phone_detected') => {
     const messages = {
@@ -36,10 +40,22 @@ const Questions = () => {
       no_face: 'No face detected',
       phone_detected: 'Mobile device detected'
     };
-    
+
     if (!violations.includes(messages[type])) {
       setViolations(prev => [...prev, messages[type]]);
       toast.warning(messages[type]);
+    }
+  };
+
+  const handleProctorViolation = (severity: 'warning' | 'critical') => {
+    if (severity === 'critical') {
+      setAssessmentPaused(true);
+      setIsMonitoringValid(false);
+      toast.error('Assessment paused due to proctoring violation. Please resolve the issue.');
+    } else {
+      if (!violations.includes('Proctoring warning')) {
+        setViolations(prev => [...prev, 'Proctoring warning']);
+      }
     }
   };
 
@@ -268,12 +284,46 @@ const Questions = () => {
           </div>
 
           <div className="space-y-4">
-            <FaceDetection 
+            <FaceDetection
               onViolation={handleViolation}
               onValidityChange={setIsMonitoringValid}
             />
           </div>
         </div>
+
+        {faceEmbedding && currentAssessmentId && (
+          <FaceVerification
+            assessmentId={currentAssessmentId}
+            registeredEmbedding={faceEmbedding}
+            onViolation={handleProctorViolation}
+          />
+        )}
+
+        {assessmentPaused && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <Card className="p-8 max-w-md mx-4">
+              <h3 className="text-2xl font-bold text-destructive mb-4">Assessment Paused</h3>
+              <p className="text-muted-foreground mb-6">
+                A proctoring violation has been detected. Please ensure:
+              </p>
+              <ul className="space-y-2 mb-6 text-sm">
+                <li>• Only you are visible in the camera</li>
+                <li>• No other people are in the frame</li>
+                <li>• Your face matches the registered face</li>
+                <li>• No phones or unauthorized devices are visible</li>
+              </ul>
+              <Button
+                onClick={() => {
+                  setAssessmentPaused(false);
+                  setIsMonitoringValid(true);
+                }}
+                className="w-full"
+              >
+                Resume Assessment
+              </Button>
+            </Card>
+          </div>
+        )}
       </main>
     </div>
   );
