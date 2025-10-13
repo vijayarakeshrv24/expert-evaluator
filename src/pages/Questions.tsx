@@ -147,16 +147,21 @@ const Questions = () => {
   };
 
   const handleAnswerSelect = (answer: string) => {
-    if (!isMonitoringValid) {
+    if (!isMonitoringValid || assessmentPaused) {
       toast.error('Cannot select answer - monitoring violation detected');
       return;
     }
     setSelectedAnswer(answer);
+    setUserAnswer(currentQuestionIndex, answer);
   };
 
   const handleNextQuestion = async () => {
+    if (assessmentPaused) {
+      toast.error('Cannot proceed - assessment is paused due to proctoring violation');
+      return;
+    }
+
     if (selectedAnswer) {
-      setUserAnswer(currentQuestionIndex, selectedAnswer);
       
       // Update in database
       await supabase

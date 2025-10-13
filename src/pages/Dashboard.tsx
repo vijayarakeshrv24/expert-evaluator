@@ -7,7 +7,7 @@ import { useAuthStore } from '@/stores/authStore';
 import { useAssessmentStore } from '@/stores/assessmentStore';
 import Navbar from '@/components/Navbar';
 import { toast } from 'sonner';
-import { FileText, Plus, Clock, CheckCircle, XCircle } from 'lucide-react';
+import { FileText, Plus, Clock, CheckCircle, XCircle, User } from 'lucide-react';
 
 interface Assessment {
   id: string;
@@ -20,6 +20,7 @@ interface Assessment {
 
 interface Profile {
   username: string;
+  profile_photo_url?: string;
 }
 
 const Dashboard = () => {
@@ -47,7 +48,7 @@ const Dashboard = () => {
           .order('created_at', { ascending: false }),
         supabase
           .from('profiles')
-          .select('username')
+          .select('username, profile_photo_url')
           .eq('id', user?.id)
           .single()
       ]);
@@ -91,10 +92,18 @@ const Dashboard = () => {
         <div className="mb-8 animate-fade-in">
           <Card className="p-6 gradient-card mb-6">
             <div className="flex items-center gap-4">
-              <div className="h-16 w-16 rounded-full bg-primary/20 flex items-center justify-center">
-                <span className="text-2xl font-bold text-primary">
-                  {profile?.username?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase()}
-                </span>
+              <div className="h-16 w-16 rounded-full bg-primary/20 flex items-center justify-center overflow-hidden">
+                {profile?.profile_photo_url ? (
+                  <img
+                    src={profile.profile_photo_url}
+                    alt={profile.username}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <span className="text-2xl font-bold text-primary">
+                    {profile?.username?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase()}
+                  </span>
+                )}
               </div>
               <div>
                 <h1 className="text-3xl font-bold">{profile?.username || 'User'}</h1>

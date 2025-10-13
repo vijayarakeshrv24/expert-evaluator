@@ -6,6 +6,7 @@ import Navbar from '@/components/Navbar';
 import { useAuthStore } from '@/stores/authStore';
 import { useAssessmentStore } from '@/stores/assessmentStore';
 import { FaceRegistration } from '@/components/FaceRegistration';
+import { supabase } from '@/integrations/supabase/client';
 import { Camera, CheckCircle, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -43,10 +44,46 @@ const Permissions = () => {
     }
   };
 
-  const handleFaceRegistrationComplete = (embeddings: number[]) => {
-    setFaceEmbedding(embeddings);
-    setShowFaceRegistration(false);
-    toast.success('Face registered successfully. You can now continue to the assessment.');
+  const handleFaceRegistrationComplete = async (embeddings: number[]) => {
+    try {
+      const { data: profile, error } = await supabase
+        .from('profiles')
+        .select('face_embedding')
+        .eq('id', user?.id)
+        .single();
+
+      if (error) throw error;
+
+      if (!profile?.face_embedding) {
+        toast.error('No profile photo found. Please contact support.');
+        return;
+      }
+
+      const storedEmbedding = profile.face_embedding as number[];
+      const distance = calculateDistance(storedEmbedding, embeddings);
+
+      if (distance > 0.6) {
+        toast.error('Face does not match your profile photo. Only the registered user can take this assessment.');
+        setShowFaceRegistration(false);
+        return;
+      }
+
+      setFaceEmbedding(embeddings);
+      setShowFaceRegistration(false);
+      toast.success('Identity verified! You can now continue to the assessment.');
+    } catch (error) {
+      console.error('Error verifying face:', error);
+      toast.error('Failed to verify identity');
+    }
+  };
+
+  const calculateDistance = (embedding1: number[], embedding2: number[]): number => {
+    let sum = 0;
+    for (let i = 0; i < embedding1.length; i++) {
+      const diff = embedding1[i] - embedding2[i];
+      sum += diff * diff;
+    }
+    return Math.sqrt(sum);
   };
 
   const handleContinue = () => {
